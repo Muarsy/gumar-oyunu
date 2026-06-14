@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bilişim Teknolojileri - Gelişmiş Web Projesi</title>
     
+    <!-- Google Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
         import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
@@ -25,7 +26,7 @@
         let mevcutKullanici = "";
         let mevcutBakiye = 0;
         let adminModuActive = false;
-        let susturuldu mu = false;
+        let susturulduDurumu = false;
 
         // OYUNLAR İÇİN DEĞİŞKENLER
         let bjOyuncuKartlar = [];
@@ -75,12 +76,12 @@
                 if(snapshot.exists()) {
                     const data = snapshot.val();
                     mevcutBakiye = data.bakiye;
-                    susturuldu mu = data.susturuldu || false;
+                    susturulduDurumu = data.susturuldu || false;
                     document.getElementById('bakiye-miktari').innerText = mevcutBakiye;
                 }
             });
 
-            // Anlık Ban Kontrolü (Oyun esnasında ban yerse diye)
+            // Anlık Ban Kontrolü
             onValue(ref(db, 'banli/' + mevcutKullanici), (snapshot) => {
                 if(snapshot.exists()) {
                     alert("Yönetici tarafından az önce BANLANDINIZ!");
@@ -100,27 +101,26 @@
                 }
             });
 
-            // Canlı Skor Tablosu (Leaderboard)
+            // Canlı Skor Tablosu
             onValue(ref(db, 'oyuncular'), (snapshot) => {
-                const skorGövde = document.getElementById('skor-tablosu-govde');
-                skorGövde.innerHTML = "";
+                const skorGovde = document.getElementById('skor-tablosu-govde');
+                skorGovde.innerHTML = "";
                 if(snapshot.exists()) {
                     const oyuncular = [];
                     Object.entries(snapshot.val()).forEach(([isim, detay]) => {
                         oyuncular.push({ isim: isim, bakiye: detay.bakiye });
                     });
-                    // Zenginleri üste sırala
                     oyuncular.sort((a, b) => b.bakiye - a.bakiye);
                     oyuncular.forEach((o, index) => {
-                        skorGövde.innerHTML += `<tr><td>${index+1}</td><td>${o.isim}</td><td>${o.bakiye}</td></tr>`;
+                        skorGovde.innerHTML += `<tr><td>${index+1}</td><td>${o.isim}</td><td>${o.bakiye}</td></tr>`;
                     });
                 }
             });
         }
 
-        // INTERNET SOHBET MESAJ GÖNDERME
+        // SOHBET MESAJ GÖNDERME
         window.mesajGonder = function() {
-            if(susturuldu mu) { alert("Susturuldun, mesaj gönderemezsin!"); return; }
+            if(susturulduDurumu) { alert("Susturuldun, mesaj gönderemezsin!"); return; }
             const mesajGirdi = document.getElementById('mesaj-girdi');
             const mesaj = mesajGirdi.value.trim();
             if(mesaj === "") return;
@@ -132,7 +132,7 @@
             mesajGirdi.value = "";
         }
 
-        // COIN GÖNDERME (TRANSFER)
+        // COIN GÖNDERME
         window.paraGonder = function() {
             const alici = document.getElementById('transfer-alici').value.trim();
             const miktar = parseInt(document.getElementById('transfer-miktar').value);
@@ -154,8 +154,6 @@
                 } else { alert("Oyuncu bulunamadı!"); }
             }, { onlyOnce: true });
         }
-
-        // ================= OYUNLAR =================
 
         // OYUN 1: ZAR DÜELLOSU
         window.zarAt = function() {
@@ -210,7 +208,6 @@
 
         window.bjDur = function() {
             if(bjOyunBitti) return;
-            // Kasa 17'ye ulaşana kadar çeker
             while(kartToplam(bjKasaKartlar) < 17) {
                 bjKasaKartlar.push(kartCek());
             }
@@ -260,7 +257,7 @@
                 let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
 
                 if(secilenAt === kazananAt) {
-                    yeniBakiye += bahis * 2; // At yarışı 3 katı verir (1 koy 2 al)
+                    yeniBakiye += bahis * 2;
                     document.getElementById('at-mesaj').innerText = `Yarışı ${kazananAt}. At (${isimler[kazananAt-1]}) kazandı! Parayı Üçe Katladın! +${bahis * 2} Coin!`;
                 } else {
                     yeniBakiye -= bahis;
@@ -270,7 +267,7 @@
             }, 1500);
         }
 
-        // ================= ADMIN PANEL MANTIĞI =================
+        // ADMIN PANEL MANTIĞI
         window.adminGirisDene = function() {
             const sifre = document.getElementById('admin-sifre-girdi').value;
             if(sifre === "1029384756Murat.") {
@@ -372,8 +369,7 @@
                 <thead>
                     <tr><th>#</th><th>Oyuncu</th><th>Coin</th></tr>
                 </thead>
-                <tbody id="skor-tablosu-govde">
-                    </tbody>
+                <tbody id="skor-tablosu-govde"></tbody>
             </table>
         </div>
 
@@ -420,7 +416,7 @@
 
             <div style="background-color: #211818; padding: 10px; border: 1px solid #482323; border-radius: 6px;">
                 <h4 style="color: #ff7b72; margin: 0 0 10px 0;">👑 Baron Girişi</h4>
-                <div id="admin-giris-alani">
+                <div id="admin-grid-alani" id="admin-giris-alani">
                     <input type="password" id="admin-sifre-girdi" placeholder="Gizli admin şifresi...">
                     <button onclick="adminGirisDene()" class="btn-danger" style="width: 95%;">Yetkilendir</button>
                 </div>
