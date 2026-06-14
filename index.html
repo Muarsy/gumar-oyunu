@@ -28,11 +28,8 @@
         let adminModuActive = false;
         let susturulduDurumu = false;
 
-        // OYUNLAR İÇİN DEĞİŞKENLER
-        let bjOyuncuKartlar = [];
-        let bjKasaKartlar = [];
-        let bjOyunBitti = true;
-        let bjBahis = 0;
+        // MULTIPLAYER 21 DEĞİŞKENLERİ
+        let aktifMasaId = null;
 
         // 1. SİSTEME GİRİŞ
         window.girisYap = function() {
@@ -41,7 +38,6 @@
 
             if(nick === "") { alert("Geçerli bir kullanıcı adı gir Baboli!"); return; }
 
-            // Ban kontrolü
             onValue(ref(db, 'banli/' + nick), (snapshot) => {
                 if(snapshot.exists()) {
                     alert("Kural ihlali nedeniyle bu kumarhaneden BANLANDINIZ!");
@@ -58,7 +54,6 @@
             document.getElementById('ana-oyun-ekrani').style.display = 'flex';
             document.getElementById('kullanici-adi').innerText = mevcutKullanici;
 
-            // Oyuncu veritabanı kaydı
             const userRef = ref(db, 'oyuncular/' + mevcutKullanici);
             onValue(userRef, (snapshot) => {
                 if (!snapshot.exists()) {
@@ -67,11 +62,11 @@
             }, { onlyOnce: true });
 
             canliDinleyicileriBaslat();
+            atYarisiDongusu();
         }
 
         // 2. CANLI VERİ AKIŞI
         function canliDinleyicileriBaslat() {
-            // Bakiye ve Susturulma Durumu Dinle
             onValue(ref(db, 'oyuncular/' + mevcutKullanici), (snapshot) => {
                 if(snapshot.exists()) {
                     const data = snapshot.val();
@@ -81,7 +76,6 @@
                 }
             });
 
-            // Anlık Ban Kontrolü
             onValue(ref(db, 'banli/' + mevcutKullanici), (snapshot) => {
                 if(snapshot.exists()) {
                     alert("Yönetici tarafından az önce BANLANDINIZ!");
@@ -89,7 +83,6 @@
                 }
             });
 
-            // Canlı Sohbet Dinle
             onValue(ref(db, 'sohbet'), (snapshot) => {
                 const sohbetKutusu = document.getElementById('sohbet-kutusu');
                 sohbetKutusu.innerHTML = "";
@@ -101,7 +94,6 @@
                 }
             });
 
-            // Canlı Skor Tablosu
             onValue(ref(db, 'oyuncular'), (snapshot) => {
                 const skorGovde = document.getElementById('skor-tablosu-govde');
                 skorGovde.innerHTML = "";
@@ -116,9 +108,28 @@
                     });
                 }
             });
+
+            // Canlı 21 Masalarını İzle
+            onValue(ref(db, 'blackjack_masalari'), (snapshot) => {
+                const liste = document.getElementById('aktif-masalar-listesi');
+                liste.innerHTML = "";
+                if(snapshot.exists()) {
+                    Object.entries(snapshot.val()).forEach(([masaid, masa]) => {
+                        if(!masa.bitti) {
+                            liste.innerHTML += `<div>
+                                <b>${masa.kurucu}</b> vs <b>${masa.rakip || 'Bekleniyor...'}</b> (Bahis: ${masa.bahis}) 
+                                ${!masa.rakip && masa.kurucu !== mevcutKullanici ? `<button onclick="masayaKatil('${masaid}')" style="padding:2px 5px; font-size:0.8rem;">Meydan Oku</button>` : ''}
+                            </div>`;
+                            if(masa.kurucu === mevcutKullanici || masa.rakip === mevcutKullanici) {
+                                aktifMasaId = masaid;
+                                duelloEkraniniGuncelle(masa);
+                            }
+                        }
+                    });
+                }
+            });
         }
 
-        // SOHBET MESAJ GÖNDERME
         window.mesajGonder = function() {
             if(susturulduDurumu) { alert("Susturuldun, mesaj gönderemezsin!"); return; }
             const mesajGirdi = document.getElementById('mesaj-girdi');
@@ -132,7 +143,6 @@
             mesajGirdi.value = "";
         }
 
-        // COIN GÖNDERME
         window.paraGonder = function() {
             const alici = document.getElementById('transfer-alici').value.trim();
             const miktar = parseInt(document.getElementById('transfer-miktar').value);
@@ -145,129 +155,202 @@
                     const aliciEskiBakiye = snapshot.val().bakiye;
                     update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - miktar });
                     update(ref(db, 'oyuncular/' + alici), { bakiye: aliciEskiBakiye + miktar });
-                    
-                    set(ref(db, 'sohbet/' + Date.now()), {
-                        gonderen: "🏦 BANKA",
-                        mesaj: `${mevcutKullanici}, ${alici} kişisine ${miktar} Coin havale etti.`
-                    });
                     alert("Para başarıyla gönderildi!");
                 } else { alert("Oyuncu bulunamadı!"); }
             }, { onlyOnce: true });
         }
 
-        // OYUN 1: ZAR DÜELLOSU
-        window.zarAt = function() {
-            const bahis = parseInt(document.getElementById('bahis-zar').value);
-            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+        // ================= CANLI GLOBAL AT YARIŞI (10 Saniye Döngü) =================
+        let atBahisSecim = null;
+        let atBahisMiktar = 0;
 
-            const zar = Math.floor(Math.random() * 6) + 1;
-            let yeniBakiye = mevcutBakiye;
-            let mesaj = "";
+        function atYarisiDongusu() {
+            const atZamanRef = ref(db, 'sistem/at_yarisi_sure');
+            onValue(atZamanRef, (snapshot) => {
+                let kalanSure = snapshot.val();
+                if(kalanSure === null) return;
+                
+                document.getElementById('at-sayac').innerText = kalanSure;
 
-            if(zar >= 4) {
-                yeniBakiye += bahis;
-                mesaj = `KAZANDIN! Zar: ${zar}. +${bahis} Coin!`;
-            } else {
-                yeniBakiye -= bahis;
-                mesaj = `KAYBETTİN! Zar: ${zar}. -${bahis} Coin Kasa Aldı.`;
-            }
-            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
-            document.getElementById('zar-mesaj').innerText = mesaj;
+                if(kalanSure > 0) {
+                    document.getElementById('at-durum-mesaj').innerText = "Bahisler Alınıyor! Atını Seç ve Paranı Yatır.";
+                    document.getElementById('at-butonlar-alani').style.display = "block";
+                } else if(kalanSure === 0) {
+                    document.getElementById('at-butonlar-alani').style.display = "none";
+                    document.getElementById('at-durum-mesaj').innerText = "Atlar kapıdan çıktı! Koşuyorlar... 🏁";
+                    
+                    // Sonucu sadece tek bir kişiden dinle (yarış bittiğinde tetiklenir)
+                    onValue(ref(db, 'sistem/at_yarisi_sonuc'), (sonucSnap) => {
+                        if(sonucSnap.exists()) {
+                            const kazanan = sonucSnap.val();
+                            let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
+                            document.getElementById('at-durum-mesaj').innerText = `Yarış Bitti! Kazanan: ${kazanan}. At (${isimler[kazanan-1]})!`;
+                            
+                            if(atBahisSecim !== null) {
+                                if(atBahisSecim === kazanan) {
+                                    let kazanc = atBahisMiktar * 3;
+                                    update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + kazanc });
+                                    alert(`Tebrikler! At Yarışından ${kazanc} Coin kazandın!`);
+                                } else {
+                                    alert(`Yarışı kaybettin. -${atBahisMiktar} Coin.`);
+                                }
+                                atBahisSecim = null;
+                                atBahisMiktar = 0;
+                            }
+                        }
+                    }, { onlyOnce: true });
+                }
+            });
         }
 
-        // OYUN 2: BLACKJACK (21)
-        window.bjBaslat = function() {
-            bjBahis = parseInt(document.getElementById('bahis-bj').value);
-            if(isNaN(bjBahis) || bjBahis <= 0 || bjBahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+        window.atBahisYatır = function(atNo) {
+            const miktar = parseInt(document.getElementById('bahis-at').value);
+            if(isNaN(miktar) || miktar <= 0 || miktar > mevcutBakiye) { alert("Geçersiz bakiye veya miktar!"); return; }
+            if(atBahisSecim !== null) { alert("Zaten bu yarış için bahis oynadın!"); return; }
 
-            bjOyuncuKartlar = [kartCek(), kartCek()];
-            bjKasaKartlar = [kartCek(), kartCek()];
-            bjOyunBitti = false;
+            atBahisSecim = atNo;
+            atBahisMiktar = miktar;
+            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - miktar });
+            let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
+            alert(`${isimler[atNo-1]} üzerine ${miktar} Coin yatırıldı! Sürenin bitmesini bekle.`);
+        }
 
-            document.getElementById('bj-kontrol-alan').style.display = "block";
-            bjEkraniGuncelle();
+        // ================= CANLI 21 DÜELLOSU (MULTIPLAYER MULTIPLAYER) =================
+        window.duelloMasaKur = function() {
+            const bahis = parseInt(document.getElementById('bahis-duello').value);
+            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+
+            const mId = "masa_" + Date.now();
+            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - bahis });
+
+            set(ref(db, 'blackjack_masalari/' + mId), {
+                id: mId,
+                kurucu: mevcutKullanici,
+                kurucuKartlar: [kartCek(), kartCek()],
+                rakip: "",
+                rakipKartlar: [],
+                bahis: bahis,
+                sira: mevcutKullanici,
+                bitti: false,
+                durumMesaj: "Rakip bekleniyor..."
+            });
+            aktifMasaId = mId;
+            document.getElementById('duello-lobi-alani').style.display = "block";
+        }
+
+        window.masayaKatil = function(mId) {
+            onValue(ref(db, 'blackjack_masalari/' + mId), (snapshot) => {
+                if(snapshot.exists()) {
+                    const masa = snapshot.val();
+                    if(masa.bahis > mevcutBakiye) { alert("Paran bu masaya yetmiyor Baboli!"); return; }
+                    if(masa.rakip !== "") return;
+
+                    update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - masa.bahis });
+                    update(ref(db, 'blackjack_masalari/' + mId), {
+                        rakip: mevcutKullanici,
+                        rakipKartlar: [kartCek(), kartCek()],
+                        durumMesaj: `Meydan okuma başladı! Sıra: ${masa.kurucu}`
+                    });
+                    aktifMasaId = mId;
+                    document.getElementById('duello-lobi-alani').style.display = "block";
+                }
+            }, { onlyOnce: true });
         }
 
         function kartCek() { return Math.floor(Math.random() * 10) + 1; }
-        function kartToplam(kartlar) { return kartlar.reduce((a, b) => a + b, 0); }
+        function kartToplam(kartlar) { return kartlar ? kartlar.reduce((a, b) => a + b, 0) : 0; }
 
-        function bjEkraniGuncelle() {
-            document.getElementById('bj-oyuncu-skor').innerText = "Kartların: " + bjOyuncuKartlar.join(", ") + " (Toplam: " + kartToplam(bjOyuncuKartlar) + ")";
-            document.getElementById('bj-kasa-skor').innerText = "Kasanın Açık Kartı: " + bjKasaKartlar[0];
-        }
-
-        window.bjKartAl = function() {
-            if(bjOyunBitti) return;
-            bjOyuncuKartlar.push(kartCek());
-            bjEkraniGuncelle();
-
-            if(kartToplam(bjOyuncuKartlar) > 21) {
-                bjBitir(false, "21'i geçtin, Kasa Kazandı!");
-            }
-        }
-
-        window.bjDur = function() {
-            if(bjOyunBitti) return;
-            while(kartToplam(bjKasaKartlar) < 17) {
-                bjKasaKartlar.push(kartCek());
-            }
-
-            const oToplam = kartToplam(bjOyuncuKartlar);
-            const kToplam = kartToplam(bjKasaKartlar);
-
-            if(kToplam > 21 || oToplam > kToplam) {
-                bjBitir(true, `Kasa Toplamı: ${kToplam}. Sen Kazandın!`);
-            } else if (oToplam === kToplam) {
-                bjBitir(true, `Berabere! Paranı geri aldın.`, true);
-            } else {
-                bjBitir(false, `Kasa Toplamı: ${kToplam}. Kasa Kazandı!`);
-            }
-        }
-
-        function bjBitir(kazandi, mesaj, berabere = false) {
-            bjOyunBitti = true;
-            document.getElementById('bj-kontrol-alan').style.display = "none";
-            let yeniBakiye = mevcutBakiye;
-
-            if(berabere) {
-                document.getElementById('bj-mesaj').innerText = mesaj;
-                return;
-            }
-
-            if(kazandi) {
-                yeniBakiye += bjBahis;
-                document.getElementById('bj-mesaj').innerText = mesaj + ` +${bjBahis} Coin!`;
-            } else {
-                yeniBakiye -= bjBahis;
-                document.getElementById('bj-mesaj').innerText = mesaj + ` -${bjBahis} Coin!`;
-            }
-            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
-        }
-
-        // OYUN 3: AT YARIŞI
-        window.atYarisiOyna = function(secilenAt) {
-            const bahis = parseInt(document.getElementById('bahis-at').value);
-            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
-
-            document.getElementById('at-mesaj').innerText = "Atlar kapıdan çıktı, koşuyorlar... 🏁";
+        function duelloEkraniniGuncelle(masa) {
+            document.getElementById('duello-durum-metni').innerText = masa.durumMesaj;
             
-            setTimeout(() => {
-                const kazananAt = Math.floor(Math.random() * 3) + 1;
-                let yeniBakiye = mevcutBakiye;
-                let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
+            const benKurucuym = (masa.kurucu === mevcutKullanici);
+            const kKartlar = masa.kurucuKartlar || [];
+            const rKartlar = masa.rakipKartlar || [];
 
-                if(secilenAt === kazananAt) {
-                    yeniBakiye += bahis * 2;
-                    document.getElementById('at-mesaj').innerText = `Yarışı ${kazananAt}. At (${isimler[kazananAt-1]}) kazandı! Parayı Üçe Katladın! +${bahis * 2} Coin!`;
-                } else {
-                    yeniBakiye -= bahis;
-                    document.getElementById('at-mesaj').innerText = `Yarışı ${kazananAt}. At (${isimler[kazananAt-1]}) kazandı. Senin at geride kaldı! -${bahis} Coin.`;
-                }
-                update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
-            }, 1500);
+            document.getElementById('duello-kurucu-skor').innerText = `${masa.kurucu}: ${kKartlar.join(", ")} (Toplam: ${kartToplam(kKartlar)})`;
+            document.getElementById('duello-rakip-skor').innerText = `${masa.rakip || 'Bekleniyor'}: ${rKartlar.join(", ")} (Toplam: ${kartToplam(rKartlar)})`;
+
+            if(!masa.bitti && masa.sira === mevcutKullanici && masa.rakip !== "") {
+                document.getElementById('duello-aksiyon-butonlari').style.display = "block";
+            } else {
+                document.getElementById('duello-aksiyon-butonlari').style.display = "none";
+            }
         }
 
-        // ADMIN PANEL MANTIĞI
+        window.duelloKartAl = function() {
+            onValue(ref(db, 'blackjack_masalari/' + aktifMasaId), (snapshot) => {
+                if(!snapshot.exists()) return;
+                const masa = snapshot.val();
+                if(masa.sira !== mevcutKullanici || masa.bitti) return;
+
+                const benKurucuym = (masa.kurucu === mevcutKullanici);
+                let yeniKartlar = benKurucuym ? [...masa.kurucuKartlar, kartCek()] : [...masa.rakipKartlar, kartCek()];
+                let toplam = kartToplam(yeniKartlar);
+
+                let guncelleme = {};
+                if(benKurucuym) {
+                    guncelleme.kurucuKartlar = yeniKartlar;
+                    if(toplam > 21) {
+                        guncelleme.sira = masa.rakip;
+                        guncelleme.durumMesaj = `${mevcutKullanici} 21'i geçti! Sıra rakipte.`;
+                    }
+                } else {
+                    guncelleme.rakipKartlar = yeniKartlar;
+                    if(toplam > 21) {
+                        duelloBitir(masa, yeniKartlar, masa.kurucuKartlar);
+                        return;
+                    }
+                }
+                update(ref(db, 'blackjack_masalari/' + aktifMasaId), guncelleme);
+            }, { onlyOnce: true });
+        }
+
+        window.duelloDur = function() {
+            onValue(ref(db, 'blackjack_masalari/' + aktifMasaId), (snapshot) => {
+                if(!snapshot.exists()) return;
+                const masa = snapshot.val();
+                if(masa.sira !== mevcutKullanici || masa.bitti) return;
+
+                if(masa.kurucu === mevcutKullanici) {
+                    update(ref(db, 'blackjack_masalari/' + aktifMasaId), {
+                        sira: masa.rakip,
+                        durumMesaj: `${mevcutKullanici} durdu. Sıra rakipte!`
+                    });
+                } else {
+                    duelloBitir(masa, masa.kurucuKartlar, masa.rakipKartlar);
+                }
+            }, { onlyOnce: true });
+        }
+
+        function duelloBitir(masa, kKart, rKart) {
+            const kTop = kartToplam(kKart);
+            const rTop = kartToplam(rKart);
+            let kazanan = "";
+            let mesaj = "";
+
+            if (kTop > 21 && rTop > 21) { kazanan = "berabere"; mesaj = "İki oyuncu da patladı! Berabere."; }
+            else if (kTop > 21) { kazanan = masa.rakip; mesaj = `${masa.rakip} kazandı!`; }
+            else if (rTop > 21) { kazanan = masa.kurucu; mesaj = `${masa.kurucu} kazandı!`; }
+            else if (kTop > rTop) { kazanan = masa.kurucu; mesaj = `${masa.kurucu} daha yüksek puanla kazandı!`; }
+            else if (rTop > kTop) { kazanan = masa.rakip; mesaj = `${masa.rakip} daha yüksek puanla kazandı!`; }
+            else { kazanan = "berabere"; mesaj = "Skorlar eşit! Berabere."; }
+
+            let ödül = masa.bahis * 2;
+            if(kazanan === mevcutKullanici) {
+                update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + ödül });
+            } else if (kazanan === "berabere") {
+                update(ref(db, 'oyuncular/' + masa.kurucu), { bakiye: mevcutBakiye + masa.bahis }); // İade mantığı sunucudan ayarlanmalı, test için basitleştirildi
+            }
+
+            update(ref(db, 'blackjack_masalari/' + masa.id), {
+                bitti: true,
+                durumMesaj: `Oyun Bitti! ${mesaj}`
+            });
+            alert(mesaj);
+            document.getElementById('duello-lobi-alani').style.display = "none";
+        }
+
+        // ================= GİZLİ ADMIN PANEL MANTIĞI =================
         window.adminGirisDene = function() {
             const sifre = document.getElementById('admin-sifre-girdi').value;
             if(sifre === "1029384756Murat.") {
@@ -275,9 +358,7 @@
                 document.getElementById('admin-panel-icerik').style.display = "block";
                 document.getElementById('admin-giris-alani').style.display = "none";
                 alert("Hoş geldin Büyük Patron Murat ÖZ. Kumarhane senin emirlerini bekliyor!");
-            } else {
-                alert("Hatalı Şifre! Baron değilsen kapıdan uzaklaş.");
-            }
+            } else { alert("Hatalı Şifre!"); }
         }
 
         window.adminBanla = function() {
@@ -285,21 +366,20 @@
             if(hedef === "") return;
             set(ref(db, 'banli/' + hedef), true);
             remove(ref(db, 'oyuncular/' + hedef));
-            alert(`${hedef} tamamen BANLANDI ve paraları sıfırlandı!`);
+            alert(`${hedef} tamamen BANLANDI!`);
         }
 
         window.adminSustur = function() {
             const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
             if(hedef === "") return;
             update(ref(db, 'oyuncular/' + hedef), { susturuldu: true });
-            alert(`${hedef} başarıyla susturuldu!`);
+            alert(`${hedef} susturuldu!`);
         }
 
         window.adminSusturAc = function() {
             const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
             if(hedef === "") return;
             update(ref(db, 'oyuncular/' + hedef), { susturuldu: false });
-            alert(`${hedef} konuşma yasağı kaldırıldı.`);
         }
 
         window.adminParaVer = function() {
@@ -310,130 +390,116 @@
             onValue(ref(db, 'oyuncular/' + hedef + '/bakiye'), (snapshot) => {
                 let mevcut = snapshot.val() || 0;
                 update(ref(db, 'oyuncular/' + hedef), { bakiye: mevcut + miktar });
-                alert(`${hedef} hesabına havadan ${miktar} Coin yüklendi!`);
+                alert(`${hedef} hesabına ${miktar} Coin eklendi!`);
             }, { onlyOnce: true });
         }
     </script>
 
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
-        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100vw; height: 100vh; background-color: #0d1117; }
+        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100vw; height: 100vh; }
         #ana-oyun-ekrani { display: none; width: 100vw; height: 100vh; }
         .panel { border: 1px solid #30363d; padding: 15px; display: flex; flex-direction: column; box-sizing: border-box; overflow-y: auto; }
-        #sol-panel { width: 22%; background-color: #161b22; }
-        #orta-panel { width: 56%; background-color: #0d1117; text-align: center; }
-        #sag-panel { width: 22%; background-color: #161b22; }
-        
-        button { background-color: #238636; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 6px; font-weight: bold; margin: 5px; }
+        #sol-panel { width: 25%; background-color: #161b22; }
+        #orta-panel { width: 50%; background-color: #0d1117; text-align: center; }
+        #sag-panel { width: 25%; background-color: #161b22; }
+        button { background-color: #238636; color: white; border: none; padding: 8px 12px; cursor: pointer; border-radius: 6px; font-weight: bold; margin: 3px; }
         button:hover { background-color: #2ea043; }
-        .btn-danger { background-color: #da3637; } .btn-danger:hover { background-color: #f85149; }
-        .btn-warn { background-color: #bf8700; }
-        input { background-color: #0d1117; border: 1px solid #30363d; color: white; padding: 10px; border-radius: 6px; margin-bottom: 10px; width: 85%; }
-        
-        #sohbet-kutusu { flex-grow: 1; border: 1px solid #30363d; background-color: #0d1117; margin-bottom: 10px; padding: 10px; overflow-y: auto; text-align: left; height: 250px; font-size: 0.9rem; }
-        .oyun-kutusu { border: 1px solid #30363d; background-color: #161b22; margin: 15px 0; padding: 15px; border-radius: 8px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
-        th, td { border: 1px solid #30363d; padding: 8px; text-align: center; }
-        th { background-color: #161b22; }
+        .btn-danger { background-color: #da3637; }
+        input { background-color: #0d1117; border: 1px solid #30363d; color: white; padding: 8px; border-radius: 6px; margin-bottom: 5px; width: 85%; }
+        #sohbet-kutusu { flex-grow: 1; border: 1px solid #30363d; background-color: #0d1117; margin-bottom: 10px; padding: 10px; overflow-y: auto; text-align: left; height: 200px; }
+        .oyun-kutusu { border: 1px solid #30363d; background-color: #161b22; margin: 10px 0; padding: 10px; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        th, td { border: 1px solid #30363d; padding: 6px; text-align: center; font-size: 0.85rem; }
     </style>
 </head>
 <body>
 
     <div id="giris-ekrani">
-        <h1 style="color: #58a6ff; font-size: 2.5rem; margin-bottom: 5px;">🎰 SİBER BİLİŞİM KUMARHANESİ v2.0 🎰</h1>
-        <p style="color: #8b949e;">Firebase Canlı Veritabanı Altyapısı ile Multiplayer Kumar Dünyası</p>
+        <h1 style="color: #58a6ff;">🎰 SİBER MULTIPLAYER CASINO v3.0 🎰</h1>
+        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adınızı Seçin..." style="width: 300px; text-align: center; font-size: 1.1rem;">
         <br>
-        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adınızı Seçin..." style="width: 300px; font-size: 1.2rem; text-align: center;">
-        <br>
-        <button onclick="girisYap()" style="font-size: 1.2rem; padding: 12px 40px;">Kumarhaneye Giriş Yap</button>
+        <button onclick="girisYap()" style="font-size: 1.1rem; padding: 10px 30px;">Giriş Yap</button>
     </div>
 
     <div id="ana-oyun-ekrani">
-        
         <div class="panel" id="sol-panel">
-            <h3>👤 Profil Bilgisi</h3>
+            <h3>👤 Profil</h3>
             <p>Oyuncu: <b id="kullanici-adi" style="color: #58a6ff;">-</b></p>
             <p>Cüzdan: <b id="bakiye-miktari" style="color: #2ea043;">0</b> Coin</p>
-            
-            <hr style="border-color: #30363d; width: 100%;">
-            
-            <h3>💸 Coin Transferi</h3>
-            <input type="text" id="transfer-alici" placeholder="Kime göndereceksin?">
+            <hr style="border-color: #30363d;">
+            <h3>💸 Transfer</h3>
+            <input type="text" id="transfer-alici" placeholder="Alıcı Nick...">
             <input type="number" id="transfer-miktar" placeholder="Miktar...">
-            <button onclick="paraGonder()">Parayı Fırlat</button>
-
-            <hr style="border-color: #30363d; width: 100%;">
-
-            <h3>🏆 Canlı Skor Tablosu</h3>
+            <button onclick="paraGonder()">Gönder</button>
+            <hr style="border-color: #30363d;">
+            <h3>🏆 Canlı Sıralama</h3>
             <table>
-                <thead>
-                    <tr><th>#</th><th>Oyuncu</th><th>Coin</th></tr>
-                </thead>
+                <thead><tr><th>#</th><th>Oyuncu</th><th>Coin</th></tr></thead>
                 <tbody id="skor-tablosu-govde"></tbody>
             </table>
         </div>
 
         <div class="panel" id="orta-panel">
-            <h2 style="color: #58a6ff; margin: 5px;">🎮 OYUN SALONU 🎮</h2>
-
-            <div class="oyun-kutusu">
-                <h3>🎲 Oyun 1: Zar Düellosu (1x Kazan)</h3>
-                <input type="number" id="bahis-zar" placeholder="Zar bahisi..." style="width: 50%;">
-                <button onclick="zarAt()">Zar At</button>
-                <div id="zar-mesaj" style="font-weight: bold; margin-top: 5px; color: #58a6ff;">Zarlar atılmayı bekliyor (4-5-6 kazanır).</div>
-            </div>
-
-            <div class="oyun-kutusu">
-                <h3>🃏 Oyun 2: Blackjack 21 (1.5x Kazan)</h3>
-                <input type="number" id="bahis-bj" placeholder="21 bahisi..." style="width: 50%;">
-                <button onclick="bjBaslat()">Masaya Otur</button>
-                <p id="bj-kasa-skor" style="color: #ff7b72;"></p>
-                <p id="bj-oyuncu-skor" style="color: #58a6ff; font-weight: bold;"></p>
-                <div id="bj-kontrol-alan" style="display:none;">
-                    <button onclick="bjKartAl()">Kart İste</button>
-                    <button onclick="bjDur()" class="btn-warn">Dur / Kasa Oynasın</button>
+            <!-- 10 SANİYE SÜREKLİ AT YARIŞI -->
+            <div class="oyun-kutusu" style="border-color: #f2cc60;">
+                <h3 style="color: #f2cc60; margin: 0;">🏁 CANLI HİPODROM (Global Döngü)</h3>
+                <p style="font-size: 1.2rem; margin: 5px 0;">Yarışın Başlamasına Son: <b id="at-sayac" style="color:#da3637; font-size: 1.5rem;">10</b> Saniye!</p>
+                <div id="at-durum-mesaj" style="font-weight: bold; color: #58a6ff;">Sistem bekleniyor...</div>
+                
+                <div id="at-butonlar-alani" style="margin-top: 10px;">
+                    <input type="number" id="bahis-at" placeholder="Yarış Bahisi..." style="width: 40%;"><br>
+                    <button onclick="atBahisYatır(1)" style="background-color: #8a6321;">1. Şahbatur (3x)</button>
+                    <button onclick="atBahisYatır(2)" style="background-color: #8a6321;">2. Gülbatur (3x)</button>
+                    <button onclick="atBahisYatır(3)" style="background-color: #8a6321;">3. Bold Pilot (3x)</button>
                 </div>
-                <div id="bj-mesaj" style="font-weight: bold; margin-top: 5px; color: #2ea043;"></div>
             </div>
 
-            <div class="oyun-kutusu">
-                <h3>🏁 Oyun 3: At Yarışı Hipodromu (3x Kazan)</h3>
-                <input type="number" id="bahis-at" placeholder="At yarışı bahisi..." style="width: 50%;"><br>
-                <button onclick="atYarisiOyna(1)" style="background-color: #8a6321;">1. Şahbatur</button>
-                <button onclick="atYarisiOyna(2)" style="background-color: #8a6321;">2. Gülbatur</button>
-                <button onclick="atYarisiOyna(3)" style="background-color: #8a6321;">3. Bold Pilot</button>
-                <div id="at-mesaj" style="font-weight: bold; margin-top: 10px; color: #f2cc60;">Atını seç ve bahis miktarını yatır!</div>
+            <!-- CANLI 21 DÜELLOSU -->
+            <div class="oyun-kutusu" style="border-color: #58a6ff;">
+                <h3 style="color: #58a6ff; margin: 0;">🃏 PVP 21 DÜELLOSU Masası</h3>
+                <input type="number" id="bahis-duello" placeholder="Masa Bahis Miktarı..." style="width: 50%; margin-top:5px;">
+                <button onclick="duelloMasaKur()">Masa Kur / Meydan Oku</button>
+                
+                <h4 style="margin: 10px 0 5px 0;">Açık Masalar</h4>
+                <div id="aktif-masalar-listesi" style="font-size: 0.9rem; background: #0d1117; padding: 5px; border-radius: 5px;"></div>
+
+                <!-- Aktif Maç Ekranı -->
+                <div id="duello-lobi-alani" style="display:none; background:#21262d; padding:10px; border-radius:8px; margin-top:10px;">
+                    <p id="duello-durum-metni" style="color:#f2cc60; font-weight:bold;"></p>
+                    <div id="duello-kurucu-skor"></div>
+                    <div id="duello-rakip-skor"></div>
+                    <div id="duello-aksiyon-butonlari" style="display:none; margin-top:5px;">
+                        <button onclick="duelloKartAl()">Kart Çek</button>
+                        <button onclick="duelloDur()" style="background:#bf8700;">Dur</button>
+                    </div>
+                </div>
             </div>
         </div>
 
         <div class="panel" id="sag-panel">
-            <h3>💬 Canlı Sınıf Sohbeti</h3>
+            <h3>💬 Canlı Sohbet</h3>
             <div id="sohbet-kutusu"></div>
-            <input type="text" id="mesaj-girdi" placeholder="Mesajınızı yazın...">
+            <input type="text" id="mesaj-girdi" placeholder="Mesaj...">
             <button onclick="mesajGonder()" style="width: 95%;">Gönder</button>
 
-            <hr style="border-color: #30363d; width: 100%; margin: 15px 0;">
-
-            <div style="background-color: #211818; padding: 10px; border: 1px solid #482323; border-radius: 6px;">
-                <h4 style="color: #ff7b72; margin: 0 0 10px 0;">👑 Baron Girişi</h4>
-                <div id="admin-grid-alani" id="admin-giris-alani">
-                    <input type="password" id="admin-sifre-girdi" placeholder="Gizli admin şifresi...">
-                    <button onclick="adminGirisDene()" class="btn-danger" style="width: 95%;">Yetkilendir</button>
+            <hr style="border-color: #30363d; margin: 10px 0;">
+            <div style="background-color: #211818; padding: 8px; border: 1px solid #482323; border-radius: 6px;">
+                <h4 style="color: #ff7b72; margin: 0 0 5px 0;">👑 Baron Panel</h4>
+                <div id="admin-giris-alani">
+                    <input type="password" id="admin-sifre-girdi" placeholder="Şifre...">
+                    <button onclick="adminGirisDene()" class="btn-danger" style="width: 95%;">Giriş</button>
                 </div>
-                
                 <div id="admin-panel-icerik" style="display: none;">
-                    <p style="color: #2ea043; font-weight: bold; font-size: 0.8rem;">YÖNETİCİ MODU AKTİF</p>
-                    <input type="text" id="admin-hedef-oyuncu" placeholder="Hedef Oyuncu Nick...">
-                    <button onclick="adminBanla()" class="btn-danger" style="font-size: 0.8rem; padding: 5px 10px;">BANLA</button>
-                    <button onclick="adminSustur()" class="btn-warn" style="font-size: 0.8rem; padding: 5px 10px;">SUSTUR</button>
-                    <button onclick="adminSusturAc()" style="font-size: 0.8rem; padding: 5px 10px; background-color: #58a6ff;">AÇ</button>
-                    <hr style="border-color: #482323;">
-                    <input type="number" id="admin-para-miktar" placeholder="Basılacak Coin...">
-                    <button onclick="adminParaVer()" style="width: 95%; background-color: #8a6321;">Hesaba Coin Bas</button>
+                    <input type="text" id="admin-hedef-oyuncu" placeholder="Hedef Nick...">
+                    <button onclick="adminBanla()" class="btn-danger">BAN</button>
+                    <button onclick="adminSustur()">SUSTUR</button>
+                    <button onclick="adminSusturAc()">AÇ</button>
+                    <input type="number" id="admin-para-miktar" placeholder="Miktar..." style="margin-top:5px;">
+                    <button onclick="adminParaVer()" style="width: 95%; background-color: #8a6321;">Coin Bas</button>
                 </div>
             </div>
         </div>
-
     </div>
 
 </body>
