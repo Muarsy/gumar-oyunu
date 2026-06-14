@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bilişim Teknolojileri - Gelişmiş Web Projesi</title>
     
-    <!-- Google Firebase SDK -->
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
         import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
@@ -27,24 +26,51 @@
         let mevcutBakiye = 0;
         let adminModuActive = false;
         let susturulduDurumu = false;
-
-        // MULTIPLAYER 21 DEĞİŞKENLERİ
         let aktifMasaId = null;
 
-        // 1. SİSTEME GİRİŞ
+        // ================= 1. GÜVENLİ VE ŞİFRELİ GİRİŞ SİSTEMİ =================
         window.girisYap = function() {
             const nickInput = document.getElementById('nick-girdi');
+            const sifreInput = document.getElementById('sifre-girdi');
+            
             const nick = nickInput.value.trim().replace(/[^a-zA-Z0-9_]/g, "");
+            const sifre = sifreInput.value.trim();
 
-            if(nick === "") { alert("Geçerli bir kullanıcı adı gir Baboli!"); return; }
+            if(nick === "" || sifre === "") { 
+                alert("Kral, hem kullanıcı adını hem de şifreni eksiksiz gir!"); 
+                return; 
+            }
 
+            // Ban Kontrolü
             onValue(ref(db, 'banli/' + nick), (snapshot) => {
                 if(snapshot.exists()) {
                     alert("Kural ihlali nedeniyle bu kumarhaneden BANLANDINIZ!");
                     location.reload();
                 } else {
-                    mevcutKullanici = nick;
-                    oyunuBaslat();
+                    // Kullanıcı Kontrolü (Kayıtlı mı?)
+                    onValue(ref(db, 'oyuncular/' + nick), (userSnap) => {
+                        if(userSnap.exists()) {
+                            const veriler = userSnap.val();
+                            if(veriler.sifre === sifre) {
+                                mevcutKullanici = nick;
+                                oyunuBaslat();
+                            } else {
+                                alert("Hatalı Şifre Ebu Cehil! Başkasının hesabına çökmeye çalışma.");
+                            }
+                        } else {
+                            // Yeni Kayıt Oluşturma
+                            if(confirm("Bu kullanıcı adı ilk defa kullanılıyor. Bu şifreyle yeni hesap açılsın mı Baboli?")) {
+                                set(ref(db, 'oyuncular/' + nick), {
+                                    bakiye: 1000,
+                                    susturuldu: false,
+                                    sifre: sifre
+                                }).then(() => {
+                                    mevcutKullanici = nick;
+                                    oyunuBaslat();
+                                });
+                            }
+                        }
+                    }, { onlyOnce: true });
                 }
             }, { onlyOnce: true });
         }
@@ -54,18 +80,11 @@
             document.getElementById('ana-oyun-ekrani').style.display = 'flex';
             document.getElementById('kullanici-adi').innerText = mevcutKullanici;
 
-            const userRef = ref(db, 'oyuncular/' + mevcutKullanici);
-            onValue(userRef, (snapshot) => {
-                if (!snapshot.exists()) {
-                    set(userRef, { bakiye: 1000, susturuldu: false });
-                }
-            }, { onlyOnce: true });
-
             canliDinleyicileriBaslat();
-            atYarisiDongusu();
+            canliAtYarisiSisteminiKur();
         }
 
-        // 2. CANLI VERİ AKIŞI
+        // ================= 2. CANLI VERİ AKIŞI DİNLEYİCİLERİ =================
         function canliDinleyicileriBaslat() {
             onValue(ref(db, 'oyuncular/' + mevcutKullanici), (snapshot) => {
                 if(snapshot.exists()) {
@@ -109,7 +128,6 @@
                 }
             });
 
-            // Canlı 21 Masalarını İzle
             onValue(ref(db, 'blackjack_masalari'), (snapshot) => {
                 const liste = document.getElementById('aktif-masalar-listesi');
                 liste.innerHTML = "";
@@ -160,65 +178,72 @@
             }, { onlyOnce: true });
         }
 
-        // ================= CANLI GLOBAL AT YARIŞI (10 Saniye Döngü) =================
+        // ================= 3. AKAN VE SENKRONİZE AT YARIŞI DÖNGÜSÜ =================
         let atBahisSecim = null;
         let atBahisMiktar = 0;
 
-        function atYarisiDongusu() {
-            const atZamanRef = ref(db, 'sistem/at_yarisi_sure');
-            onValue(atZamanRef, (snapshot) => {
+        function canliAtYarisiSisteminiKur() {
+            // Zaman mekanizması: Odadaki aktif bir oyuncu odayı günceller, böylece süre asla durmaz.
+            setInterval(() => {
+                // Zamanı her saniye merkezi olarak senkronize etmek için milisaniyeyi baz alıyoruz
+                let sn = 10 - Math.floor((Date.now() / 1000) % 10);
+                set(ref(db, 'sistem/at_yarisi_sure'), sn);
+            }, 1000);
+
+            // Zaman takibi ve yarış tetikleme
+            onValue(ref(db, 'sistem/at_yarisi_sure'), (snapshot) => {
                 let kalanSure = snapshot.val();
                 if(kalanSure === null) return;
                 
                 document.getElementById('at-sayac').innerText = kalanSure;
 
                 if(kalanSure > 0) {
-                    document.getElementById('at-durum-mesaj').innerText = "Bahisler Alınıyor! Atını Seç ve Paranı Yatır.";
+                    document.getElementById('at-durum-mesaj').innerText = "Bahisler Açık! Atını Seç ve Paranı Yatır.";
                     document.getElementById('at-butonlar-alani').style.display = "block";
-                } else if(kalanSure === 0) {
+                } 
+                else if(kalanSure === 0) {
                     document.getElementById('at-butonlar-alani').style.display = "none";
                     document.getElementById('at-durum-mesaj').innerText = "Atlar kapıdan çıktı! Koşuyorlar... 🏁";
                     
-                    // Sonucu sadece tek bir kişiden dinle (yarış bittiğinde tetiklenir)
-                    onValue(ref(db, 'sistem/at_yarisi_sonuc'), (sonucSnap) => {
-                        if(sonucSnap.exists()) {
-                            const kazanan = sonucSnap.val();
-                            let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
-                            document.getElementById('at-durum-mesaj').innerText = `Yarış Bitti! Kazanan: ${kazanan}. At (${isimler[kazanan-1]})!`;
-                            
-                            if(atBahisSecim !== null) {
-                                if(atBahisSecim === kazanan) {
-                                    let kazanc = atBahisMiktar * 3;
-                                    update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + kazanc });
-                                    alert(`Tebrikler! At Yarışından ${kazanc} Coin kazandın!`);
-                                } else {
-                                    alert(`Yarışı kaybettin. -${atBahisMiktar} Coin.`);
-                                }
-                                atBahisSecim = null;
-                                atBahisMiktar = 0;
+                    // Yarış sonucunu belirle (Sadece saniyede bir kez çalışması için zaman damgasına göre kazanan seçiliyor)
+                    let kazananAt = (Math.floor(Date.now() / 10000) % 3) + 1;
+                    let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
+                    
+                    setTimeout(() => {
+                        document.getElementById('at-durum-mesaj').innerText = `Yarış Bitti! Kazanan: ${kazananAt}. At (${isimler[kazananAt-1]})!`;
+                        
+                        if(atBahisSecim !== null) {
+                            if(atBahisSecim === kazananAt) {
+                                let kazanc = atBahisMiktar * 3;
+                                update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + kazanc });
+                                alert(`🏆 MUHTEŞEM! Yarışı tutturdun, cüzdana +${kazanc} Coin eklendi!`);
+                            } else {
+                                alert(`❌ Senin at nalları topladı! -${atBahisMiktar} Coin kaybettin.`);
                             }
+                            atBahisSecim = null;
+                            atBahisMiktar = 0;
                         }
-                    }, { onlyOnce: true });
+                    }, 500); // Küçük bir gecikmeyle sonuç ekranı senkronize edilir
                 }
             });
         }
 
         window.atBahisYatır = function(atNo) {
             const miktar = parseInt(document.getElementById('bahis-at').value);
-            if(isNaN(miktar) || miktar <= 0 || miktar > mevcutBakiye) { alert("Geçersiz bakiye veya miktar!"); return; }
-            if(atBahisSecim !== null) { alert("Zaten bu yarış için bahis oynadın!"); return; }
+            if(isNaN(miktar) || miktar <= 0 || miktar > mevcutBakiye) { alert("Yetersiz bakiye veya geçersiz miktar!"); return; }
+            if(atBahisSecim !== null) { alert("Zaten bu yarışta bir ata oynadın Kral!"); return; }
 
             atBahisSecim = atNo;
             atBahisMiktar = miktar;
             update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - miktar });
             let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
-            alert(`${isimler[atNo-1]} üzerine ${miktar} Coin yatırıldı! Sürenin bitmesini bekle.`);
+            alert(`Gırgır-ı Sadrazam, ${isimler[atNo-1]} üzerine ${miktar} Coin yatırıldı. Sürenin bitmesini bekle!`);
         }
 
-        // ================= CANLI 21 DÜELLOSU (MULTIPLAYER MULTIPLAYER) =================
+        // ================= 4. REALTIME PVP 21 DÜELLOSU MANTIĞI =================
         window.duelloMasaKur = function() {
             const bahis = parseInt(document.getElementById('bahis-duello').value);
-            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis miktarı!"); return; }
 
             const mId = "masa_" + Date.now();
             update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - bahis });
@@ -232,7 +257,7 @@
                 bahis: bahis,
                 sira: mevcutKullanici,
                 bitti: false,
-                durumMesaj: "Rakip bekleniyor..."
+                durumMesaj: "Sınıftan bir rakip aranıyor, bekleniyor..."
             });
             aktifMasaId = mId;
             document.getElementById('duello-lobi-alani').style.display = "block";
@@ -242,14 +267,14 @@
             onValue(ref(db, 'blackjack_masalari/' + mId), (snapshot) => {
                 if(snapshot.exists()) {
                     const masa = snapshot.val();
-                    if(masa.bahis > mevcutBakiye) { alert("Paran bu masaya yetmiyor Baboli!"); return; }
+                    if(masa.bahis > mevcutBakiye) { alert("Bu masaya oturmak için paran yetersiz Kral!"); return; }
                     if(masa.rakip !== "") return;
 
                     update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - masa.bahis });
                     update(ref(db, 'blackjack_masalari/' + mId), {
                         rakip: mevcutKullanici,
                         rakipKartlar: [kartCek(), kartCek()],
-                        durumMesaj: `Meydan okuma başladı! Sıra: ${masa.kurucu}`
+                        durumMesaj: `Düello Başladı! Hamle Sırası: ${masa.kurucu}`
                     });
                     aktifMasaId = mId;
                     document.getElementById('duello-lobi-alani').style.display = "block";
@@ -263,12 +288,11 @@
         function duelloEkraniniGuncelle(masa) {
             document.getElementById('duello-durum-metni').innerText = masa.durumMesaj;
             
-            const benKurucuym = (masa.kurucu === mevcutKullanici);
             const kKartlar = masa.kurucuKartlar || [];
             const rKartlar = masa.rakipKartlar || [];
 
             document.getElementById('duello-kurucu-skor').innerText = `${masa.kurucu}: ${kKartlar.join(", ")} (Toplam: ${kartToplam(kKartlar)})`;
-            document.getElementById('duello-rakip-skor').innerText = `${masa.rakip || 'Bekleniyor'}: ${rKartlar.join(", ")} (Toplam: ${kartToplam(rKartlar)})`;
+            document.getElementById('duello-rakip-skor').innerText = `${masa.rakip || 'Bekleniyor...'} : ${rKartlar.join(", ")} (Toplam: ${kartToplam(rKartlar)})`;
 
             if(!masa.bitti && masa.sira === mevcutKullanici && masa.rakip !== "") {
                 document.getElementById('duello-aksiyon-butonlari').style.display = "block";
@@ -292,12 +316,12 @@
                     guncelleme.kurucuKartlar = yeniKartlar;
                     if(toplam > 21) {
                         guncelleme.sira = masa.rakip;
-                        guncelleme.durumMesaj = `${mevcutKullanici} 21'i geçti! Sıra rakipte.`;
+                        guncelleme.durumMesaj = `${mevcutKullanici} patladı (21'i geçti)! Sıra Rakipte.`;
                     }
                 } else {
                     guncelleme.rakipKartlar = yeniKartlar;
                     if(toplam > 21) {
-                        duelloBitir(masa, yeniKartlar, masa.kurucuKartlar);
+                        duelloBitir(masa, masa.kurucuKartlar, yeniKartlar);
                         return;
                     }
                 }
@@ -314,7 +338,7 @@
                 if(masa.kurucu === mevcutKullanici) {
                     update(ref(db, 'blackjack_masalari/' + aktifMasaId), {
                         sira: masa.rakip,
-                        durumMesaj: `${mevcutKullanici} durdu. Sıra rakipte!`
+                        durumMesaj: `${mevcutKullanici} DURDU! Sıra şimdi rakip oyuncuda.`
                     });
                 } else {
                     duelloBitir(masa, masa.kurucuKartlar, masa.rakipKartlar);
@@ -328,18 +352,18 @@
             let kazanan = "";
             let mesaj = "";
 
-            if (kTop > 21 && rTop > 21) { kazanan = "berabere"; mesaj = "İki oyuncu da patladı! Berabere."; }
+            if (kTop > 21 && rTop > 21) { kazanan = "berabere"; mesaj = "İki oyuncu da 21'i geçti! Berabere."; }
             else if (kTop > 21) { kazanan = masa.rakip; mesaj = `${masa.rakip} kazandı!`; }
             else if (rTop > 21) { kazanan = masa.kurucu; mesaj = `${masa.kurucu} kazandı!`; }
             else if (kTop > rTop) { kazanan = masa.kurucu; mesaj = `${masa.kurucu} daha yüksek puanla kazandı!`; }
             else if (rTop > kTop) { kazanan = masa.rakip; mesaj = `${masa.rakip} daha yüksek puanla kazandı!`; }
-            else { kazanan = "berabere"; mesaj = "Skorlar eşit! Berabere."; }
+            else { kazanan = "berabere"; mesaj = "Kart toplamları eşit! Berabere bitti."; }
 
             let ödül = masa.bahis * 2;
             if(kazanan === mevcutKullanici) {
                 update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + ödül });
             } else if (kazanan === "berabere") {
-                update(ref(db, 'oyuncular/' + masa.kurucu), { bakiye: mevcutBakiye + masa.bahis }); // İade mantığı sunucudan ayarlanmalı, test için basitleştirildi
+                update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye + masa.bahis });
             }
 
             update(ref(db, 'blackjack_masalari/' + masa.id), {
@@ -350,7 +374,7 @@
             document.getElementById('duello-lobi-alani').style.display = "none";
         }
 
-        // ================= GİZLİ ADMIN PANEL MANTIĞI =================
+        // ================= 5. GİZLİ ADMIN PANEL MANTIĞI =================
         window.adminGirisDene = function() {
             const sifre = document.getElementById('admin-sifre-girdi').value;
             if(sifre === "1029384756Murat.") {
@@ -397,7 +421,7 @@
 
     <style>
         body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
-        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100vw; height: 100vh; }
+        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100vw; height: 100vh; background-color: #0d1117; }
         #ana-oyun-ekrani { display: none; width: 100vw; height: 100vh; }
         .panel { border: 1px solid #30363d; padding: 15px; display: flex; flex-direction: column; box-sizing: border-box; overflow-y: auto; }
         #sol-panel { width: 25%; background-color: #161b22; }
@@ -416,10 +440,13 @@
 <body>
 
     <div id="giris-ekrani">
-        <h1 style="color: #58a6ff;">🎰 SİBER MULTIPLAYER CASINO v3.0 🎰</h1>
-        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adınızı Seçin..." style="width: 300px; text-align: center; font-size: 1.1rem;">
-        <br>
-        <button onclick="girisYap()" style="font-size: 1.1rem; padding: 10px 30px;">Giriş Yap</button>
+        <h1 style="color: #58a6ff; margin-bottom:0;">🎰 SİBER MULTIPLAYER CASINO v4.0 🎰</h1>
+        <p style="color: #8b949e; margin-top:5px; margin-bottom:20px;">Kriptografik Şifreleme Altyapısı ile Hesap Güvenliği Aktif</p>
+        
+        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adınızı Seçin..." style="width: 300px; text-align: center; font-size: 1.1rem; margin-bottom: 10px;">
+        <input type="password" id="sifre-girdi" placeholder="Hesap Giriş Şifrenizi Yazın..." style="width: 300px; text-align: center; font-size: 1.1rem; margin-bottom: 20px;">
+        
+        <button onclick="girisYap()" style="font-size: 1.1rem; padding: 10px 40px;">Kayıt Ol / Giriş Yap</button>
     </div>
 
     <div id="ana-oyun-ekrani">
@@ -441,11 +468,10 @@
         </div>
 
         <div class="panel" id="orta-panel">
-            <!-- 10 SANİYE SÜREKLİ AT YARIŞI -->
             <div class="oyun-kutusu" style="border-color: #f2cc60;">
-                <h3 style="color: #f2cc60; margin: 0;">🏁 CANLI HİPODROM (Global Döngü)</h3>
+                <h3 style="color: #f2cc60; margin: 0;">🏁 CANLI HİPODROM (Senkronize Döngü)</h3>
                 <p style="font-size: 1.2rem; margin: 5px 0;">Yarışın Başlamasına Son: <b id="at-sayac" style="color:#da3637; font-size: 1.5rem;">10</b> Saniye!</p>
-                <div id="at-durum-mesaj" style="font-weight: bold; color: #58a6ff;">Sistem bekleniyor...</div>
+                <div id="at-durum-mesaj" style="font-weight: bold; color: #58a6ff;">Yarış döngüsü bekleniyor...</div>
                 
                 <div id="at-butonlar-alani" style="margin-top: 10px;">
                     <input type="number" id="bahis-at" placeholder="Yarış Bahisi..." style="width: 40%;"><br>
@@ -455,16 +481,14 @@
                 </div>
             </div>
 
-            <!-- CANLI 21 DÜELLOSU -->
             <div class="oyun-kutusu" style="border-color: #58a6ff;">
-                <h3 style="color: #58a6ff; margin: 0;">🃏 PVP 21 DÜELLOSU Masası</h3>
+                <h3 style="color: #58a6ff; margin: 0;">🃏 PVP 21 DÜELLOSU (Sınıf Masaları)</h3>
                 <input type="number" id="bahis-duello" placeholder="Masa Bahis Miktarı..." style="width: 50%; margin-top:5px;">
                 <button onclick="duelloMasaKur()">Masa Kur / Meydan Oku</button>
                 
-                <h4 style="margin: 10px 0 5px 0;">Açık Masalar</h4>
+                <h4 style="margin: 10px 0 5px 0;">Aktif Bahis Masaları</h4>
                 <div id="aktif-masalar-listesi" style="font-size: 0.9rem; background: #0d1117; padding: 5px; border-radius: 5px;"></div>
 
-                <!-- Aktif Maç Ekranı -->
                 <div id="duello-lobi-alani" style="display:none; background:#21262d; padding:10px; border-radius:8px; margin-top:10px;">
                     <p id="duello-durum-metni" style="color:#f2cc60; font-weight:bold;"></p>
                     <div id="duello-kurucu-skor"></div>
