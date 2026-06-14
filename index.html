@@ -3,13 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bilişim Performans Ödevi</title>
+    <title>Bilişim Teknolojileri - Gelişmiş Web Projesi</title>
     
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
-        import { getDatabase, ref, set, onValue, update } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
+        import { getDatabase, ref, set, onValue, update, remove } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-database.js";
 
-        // Senin Firebase Kimlik Bilgilerin
         const firebaseConfig = {
             apiKey: "AIzaSyDd-omHEk9QNLQf74Kcu0I5D4pRuKkqZbQ",
             authDomain: "murat-odev-proje.firebaseapp.com",
@@ -23,192 +22,422 @@
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
 
-        // Küresel Değişkenler
         let mevcutKullanici = "";
         let mevcutBakiye = 0;
+        let adminModuActive = false;
+        let susturuldu mu = false;
 
-        // 1. GİRİŞ YAPMA FONKSİYONU
+        // OYUNLAR İÇİN DEĞİŞKENLER
+        let bjOyuncuKartlar = [];
+        let bjKasaKartlar = [];
+        let bjOyunBitti = true;
+        let bjBahis = 0;
+
+        // 1. SİSTEME GİRİŞ
         window.girisYap = function() {
             const nickInput = document.getElementById('nick-girdi');
-            const nick = nickInput.value.trim().replace(/[^a-zA-Z0-9_]/g, ""); // Güvenli nick
+            const nick = nickInput.value.trim().replace(/[^a-zA-Z0-9_]/g, "");
 
             if(nick === "") { alert("Geçerli bir kullanıcı adı gir Baboli!"); return; }
 
-            mevcutKullanici = nick;
-            
-            // Veritabanında bu kullanıcı var mı kontrol et, yoksa 1000 Coin ile oluştur
-            const userRef = ref(db, 'oyuncular/' + mevcutKullanici);
-            onValue(userRef, (snapshot) => {
-                const data = snapshot.val();
-                if (data === null) {
-                    set(userRef, { bakiye: 1000 });
+            // Ban kontrolü
+            onValue(ref(db, 'banli/' + nick), (snapshot) => {
+                if(snapshot.exists()) {
+                    alert("Kural ihlali nedeniyle bu kumarhaneden BANLANDINIZ!");
+                    location.reload();
                 } else {
-                    mevcutBakiye = data.bakiye;
-                    document.getElementById('bakiye-miktari').innerText = mevcutBakiye;
+                    mevcutKullanici = nick;
+                    oyunuBaslat();
                 }
             }, { onlyOnce: true });
+        }
 
-            // Ekranları Değiştir
+        function oyunuBaslat() {
             document.getElementById('giris-ekrani').style.display = 'none';
             document.getElementById('ana-oyun-ekrani').style.display = 'flex';
             document.getElementById('kullanici-adi').innerText = mevcutKullanici;
 
-            // Canlı Veri Dinleyicilerini Başlat
-            canliVerileriDinle();
+            // Oyuncu veritabanı kaydı
+            const userRef = ref(db, 'oyuncular/' + mevcutKullanici);
+            onValue(userRef, (snapshot) => {
+                if (!snapshot.exists()) {
+                    set(userRef, { bakiye: 1000, susturuldu: false });
+                }
+            }, { onlyOnce: true });
+
+            canliDinleyicileriBaslat();
         }
 
-        // 2. CANLI VERİ DİNLEME (SOHBET VE BAKİYE)
-        function canliVerileriDinle() {
-            // Bakiyeyi anlık dinle
-            onValue(ref(db, 'oyuncular/' + mevcutKullanici + '/bakiye'), (snapshot) => {
+        // 2. CANLI VERİ AKIŞI
+        function canliDinleyicileriBaslat() {
+            // Bakiye ve Susturulma Durumu Dinle
+            onValue(ref(db, 'oyuncular/' + mevcutKullanici), (snapshot) => {
                 if(snapshot.exists()) {
-                    mevcutBakiye = snapshot.val();
+                    const data = snapshot.val();
+                    mevcutBakiye = data.bakiye;
+                    susturuldu mu = data.susturuldu || false;
                     document.getElementById('bakiye-miktari').innerText = mevcutBakiye;
                 }
             });
 
-            // Sohbeti anlık dinle
+            // Anlık Ban Kontrolü (Oyun esnasında ban yerse diye)
+            onValue(ref(db, 'banli/' + mevcutKullanici), (snapshot) => {
+                if(snapshot.exists()) {
+                    alert("Yönetici tarafından az önce BANLANDINIZ!");
+                    location.reload();
+                }
+            });
+
+            // Canlı Sohbet Dinle
             onValue(ref(db, 'sohbet'), (snapshot) => {
                 const sohbetKutusu = document.getElementById('sohbet-kutusu');
                 sohbetKutusu.innerHTML = "";
-                const veriler = snapshot.val();
-                if(veriler) {
-                    Object.values(veriler).forEach(m => {
+                if(snapshot.exists()) {
+                    Object.values(snapshot.val()).forEach(m => {
                         sohbetKutusu.innerHTML += `<div><b>${m.gonderen}:</b> ${m.mesaj}</div>`;
                     });
                     sohbetKutusu.scrollTop = sohbetKutusu.scrollHeight;
                 }
             });
+
+            // Canlı Skor Tablosu (Leaderboard)
+            onValue(ref(db, 'oyuncular'), (snapshot) => {
+                const skorGövde = document.getElementById('skor-tablosu-govde');
+                skorGövde.innerHTML = "";
+                if(snapshot.exists()) {
+                    const oyuncular = [];
+                    Object.entries(snapshot.val()).forEach(([isim, detay]) => {
+                        oyuncular.push({ isim: isim, bakiye: detay.bakiye });
+                    });
+                    // Zenginleri üste sırala
+                    oyuncular.sort((a, b) => b.bakiye - a.bakiye);
+                    oyuncular.forEach((o, index) => {
+                        skorGövde.innerHTML += `<tr><td>${index+1}</td><td>${o.isim}</td><td>${o.bakiye}</td></tr>`;
+                    });
+                }
+            });
         }
 
-        // 3. ZAR ATMA VE KUMAR MANTIĞI
-        window.zarAt = function() {
-            const bahisInput = document.getElementById('bahis-miktari');
-            const bahis = parseInt(bahisInput.value);
-
-            if(isNaN(bahis) || bahis <= 0) { alert("Düzgün bir bahis gir Kral!"); return; }
-            if(bahis > mevcutBakiye) { alert("Yetersiz bakiye, o kadar Coinin yok!"); return; }
-
-            const zar = Math.floor(Math.random() * 6) + 1;
-            document.getElementById('zar-sonuc').innerText = zar;
-
-            let yeniBakiye = mevcutBakiye;
-            if(zar >= 4) {
-                yeniBakiye += bahis;
-                document.getElementById('oyun-mesaji').innerText = `KAZANDIN! +${bahis} Coin!`;
-                document.getElementById('oyun-mesaji').style.color = "#2ea043";
-            } else {
-                yeniBakiye -= bahis;
-                document.getElementById('oyun-mesaji').innerText = `KAYBETTİN! -${bahis} Coin.`;
-                document.getElementById('oyun-mesaji').style.color = "#f85149";
-            }
-
-            // Veritabanında bakiyeyi güncelle
-            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
-            bahisInput.value = "";
-        }
-
-        // 4. CANLI SOHBET MESAJ GÖNDERME
+        // INTERNET SOHBET MESAJ GÖNDERME
         window.mesajGonder = function() {
+            if(susturuldu mu) { alert("Susturuldun, mesaj gönderemezsin!"); return; }
             const mesajGirdi = document.getElementById('mesaj-girdi');
             const mesaj = mesajGirdi.value.trim();
             if(mesaj === "") return;
 
-            const yeniMesajRef = ref(db, 'sohbet/' + Date.now());
-            set(yeniMesajRef, {
-                gonderen: mevcutKullanici,
+            set(ref(db, 'sohbet/' + Date.now()), {
+                gonderen: adminModuActive ? "👑 ADMIN (" + mevcutKullanici + ")" : mevcutKullanici,
                 mesaj: mesaj
             });
             mesajGirdi.value = "";
         }
 
-        // 5. COIN TRANSFER SİSTEMİ
+        // COIN GÖNDERME (TRANSFER)
         window.paraGonder = function() {
-            const aliciInput = document.getElementById('transfer-alici');
-            const miktarInput = document.getElementById('transfer-miktar');
-            const alici = aliciInput.value.trim();
-            const miktar = parseInt(miktarInput.value);
+            const alici = document.getElementById('transfer-alici').value.trim();
+            const miktar = parseInt(document.getElementById('transfer-miktar').value);
 
-            if(alici === mevcutKullanici) { alert("Kendine para gönderemezsin Kankiş!"); return; }
-            if(isNaN(miktar) || miktar <= 0) { alert("Düzgün bir miktar gir!"); return; }
-            if(miktar > mevcutBakiye) { alert("Yetersiz bakiye!"); return; }
+            if(alici === mevcutKullanici) { alert("Kendine para atamazsın!"); return; }
+            if(isNaN(miktar) || miktar <= 0 || miktar > mevcutBakiye) { alert("Geçersiz miktar!"); return; }
 
-            // Alıcıyı kontrol et
             onValue(ref(db, 'oyuncular/' + alici), (snapshot) => {
                 if(snapshot.exists()) {
                     const aliciEskiBakiye = snapshot.val().bakiye;
-                    
-                    // Gönderenin parasını düş, alıcınınkini arttır
                     update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: mevcutBakiye - miktar });
                     update(ref(db, 'oyuncular/' + alici), { bakiye: aliciEskiBakiye + miktar });
                     
-                    // Sisteme transfer mesajı düş
                     set(ref(db, 'sohbet/' + Date.now()), {
-                        gonderen: "🏦 SİSTEM",
-                        mesaj: `${mevcutKullanici}, ${alici} adlı oyuncuya ${miktar} Coin fırlattı!`
+                        gonderen: "🏦 BANKA",
+                        mesaj: `${mevcutKullanici}, ${alici} kişisine ${miktar} Coin havale etti.`
                     });
+                    alert("Para başarıyla gönderildi!");
+                } else { alert("Oyuncu bulunamadı!"); }
+            }, { onlyOnce: true });
+        }
 
-                    alert("Transfer Başarılı Baboli!");
-                    aliciInput.value = "";
-                    miktarInput.value = "";
+        // ================= OYUNLAR =================
+
+        // OYUN 1: ZAR DÜELLOSU
+        window.zarAt = function() {
+            const bahis = parseInt(document.getElementById('bahis-zar').value);
+            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+
+            const zar = Math.floor(Math.random() * 6) + 1;
+            let yeniBakiye = mevcutBakiye;
+            let mesaj = "";
+
+            if(zar >= 4) {
+                yeniBakiye += bahis;
+                mesaj = `KAZANDIN! Zar: ${zar}. +${bahis} Coin!`;
+            } else {
+                yeniBakiye -= bahis;
+                mesaj = `KAYBETTİN! Zar: ${zar}. -${bahis} Coin Kasa Aldı.`;
+            }
+            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
+            document.getElementById('zar-mesaj').innerText = mesaj;
+        }
+
+        // OYUN 2: BLACKJACK (21)
+        window.bjBaslat = function() {
+            bjBahis = parseInt(document.getElementById('bahis-bj').value);
+            if(isNaN(bjBahis) || bjBahis <= 0 || bjBahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+
+            bjOyuncuKartlar = [kartCek(), kartCek()];
+            bjKasaKartlar = [kartCek(), kartCek()];
+            bjOyunBitti = false;
+
+            document.getElementById('bj-kontrol-alan').style.display = "block";
+            bjEkraniGuncelle();
+        }
+
+        function kartCek() { return Math.floor(Math.random() * 10) + 1; }
+        function kartToplam(kartlar) { return kartlar.reduce((a, b) => a + b, 0); }
+
+        function bjEkraniGuncelle() {
+            document.getElementById('bj-oyuncu-skor').innerText = "Kartların: " + bjOyuncuKartlar.join(", ") + " (Toplam: " + kartToplam(bjOyuncuKartlar) + ")";
+            document.getElementById('bj-kasa-skor').innerText = "Kasanın Açık Kartı: " + bjKasaKartlar[0];
+        }
+
+        window.bjKartAl = function() {
+            if(bjOyunBitti) return;
+            bjOyuncuKartlar.push(kartCek());
+            bjEkraniGuncelle();
+
+            if(kartToplam(bjOyuncuKartlar) > 21) {
+                bjBitir(false, "21'i geçtin, Kasa Kazandı!");
+            }
+        }
+
+        window.bjDur = function() {
+            if(bjOyunBitti) return;
+            // Kasa 17'ye ulaşana kadar çeker
+            while(kartToplam(bjKasaKartlar) < 17) {
+                bjKasaKartlar.push(kartCek());
+            }
+
+            const oToplam = kartToplam(bjOyuncuKartlar);
+            const kToplam = kartToplam(bjKasaKartlar);
+
+            if(kToplam > 21 || oToplam > kToplam) {
+                bjBitir(true, `Kasa Toplamı: ${kToplam}. Sen Kazandın!`);
+            } else if (oToplam === kToplam) {
+                bjBitir(true, `Berabere! Paranı geri aldın.`, true);
+            } else {
+                bjBitir(false, `Kasa Toplamı: ${kToplam}. Kasa Kazandı!`);
+            }
+        }
+
+        function bjBitir(kazandi, mesaj, berabere = false) {
+            bjOyunBitti = true;
+            document.getElementById('bj-kontrol-alan').style.display = "none";
+            let yeniBakiye = mevcutBakiye;
+
+            if(berabere) {
+                document.getElementById('bj-mesaj').innerText = mesaj;
+                return;
+            }
+
+            if(kazandi) {
+                yeniBakiye += bjBahis;
+                document.getElementById('bj-mesaj').innerText = mesaj + ` +${bjBahis} Coin!`;
+            } else {
+                yeniBakiye -= bjBahis;
+                document.getElementById('bj-mesaj').innerText = mesaj + ` -${bjBahis} Coin!`;
+            }
+            update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
+        }
+
+        // OYUN 3: AT YARIŞI
+        window.atYarisiOyna = function(secilenAt) {
+            const bahis = parseInt(document.getElementById('bahis-at').value);
+            if(isNaN(bahis) || bahis <= 0 || bahis > mevcutBakiye) { alert("Geçersiz bahis!"); return; }
+
+            document.getElementById('at-mesaj').innerText = "Atlar kapıdan çıktı, koşuyorlar... 🏁";
+            
+            setTimeout(() => {
+                const kazananAt = Math.floor(Math.random() * 3) + 1;
+                let yeniBakiye = mevcutBakiye;
+                let isimler = ["Şahbatur", "Gülbatur", "Bold Pilot"];
+
+                if(secilenAt === kazananAt) {
+                    yeniBakiye += bahis * 2; // At yarışı 3 katı verir (1 koy 2 al)
+                    document.getElementById('at-mesaj').innerText = `Yarışı ${kazananAt}. At (${isimler[kazananAt-1]}) kazandı! Parayı Üçe Katladın! +${bahis * 2} Coin!`;
                 } else {
-                    alert("Böyle bir oyuncu bulunamadı! Önce sisteme bir kere giriş yapmalı.");
+                    yeniBakiye -= bahis;
+                    document.getElementById('at-mesaj').innerText = `Yarışı ${kazananAt}. At (${isimler[kazananAt-1]}) kazandı. Senin at geride kaldı! -${bahis} Coin.`;
                 }
+                update(ref(db, 'oyuncular/' + mevcutKullanici), { bakiye: yeniBakiye });
+            }, 1500);
+        }
+
+        // ================= ADMIN PANEL MANTIĞI =================
+        window.adminGirisDene = function() {
+            const sifre = document.getElementById('admin-sifre-girdi').value;
+            if(sifre === "1029384756Murat.") {
+                adminModuActive = true;
+                document.getElementById('admin-panel-icerik').style.display = "block";
+                document.getElementById('admin-giris-alani').style.display = "none";
+                alert("Hoş geldin Büyük Patron Murat ÖZ. Kumarhane senin emirlerini bekliyor!");
+            } else {
+                alert("Hatalı Şifre! Baron değilsen kapıdan uzaklaş.");
+            }
+        }
+
+        window.adminBanla = function() {
+            const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
+            if(hedef === "") return;
+            set(ref(db, 'banli/' + hedef), true);
+            remove(ref(db, 'oyuncular/' + hedef));
+            alert(`${hedef} tamamen BANLANDI ve paraları sıfırlandı!`);
+        }
+
+        window.adminSustur = function() {
+            const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
+            if(hedef === "") return;
+            update(ref(db, 'oyuncular/' + hedef), { susturuldu: true });
+            alert(`${hedef} başarıyla susturuldu!`);
+        }
+
+        window.adminSusturAc = function() {
+            const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
+            if(hedef === "") return;
+            update(ref(db, 'oyuncular/' + hedef), { susturuldu: false });
+            alert(`${hedef} konuşma yasağı kaldırıldı.`);
+        }
+
+        window.adminParaVer = function() {
+            const hedef = document.getElementById('admin-hedef-oyuncu').value.trim();
+            const miktar = parseInt(document.getElementById('admin-para-miktar').value);
+            if(hedef === "" || isNaN(miktar)) return;
+
+            onValue(ref(db, 'oyuncular/' + hedef + '/bakiye'), (snapshot) => {
+                let mevcut = snapshot.val() || 0;
+                update(ref(db, 'oyuncular/' + hedef), { bakiye: mevcut + miktar });
+                alert(`${hedef} hesabına havadan ${miktar} Coin yüklendi!`);
             }, { onlyOnce: true });
         }
     </script>
 
     <style>
-        body { background-color: #0d1117; color: #c9d1d9; font-family: sans-serif; margin: 0; padding: 0; }
-        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; }
-        #ana-oyun-ekrani { display: none; height: 100vh; }
-        .panel { border: 1px solid #30363d; padding: 20px; display: flex; flex-direction: column; box-sizing: border-box; }
-        #sol-panel { width: 25%; background-color: #161b22; }
-        #orta-panel { width: 50%; background-color: #0d1117; justify-content: center; align-items: center; text-align: center; }
-        #sag-panel { width: 25%; background-color: #161b22; }
-        button { background-color: #238636; color: white; border: none; padding: 12px; cursor: pointer; border-radius: 6px; font-weight: bold; }
-        input { background-color: #0d1117; border: 1px solid #30363d; color: white; padding: 12px; border-radius: 6px; margin-bottom: 10px; }
-        #sohbet-kutusu { flex-grow: 1; border: 1px solid #30363d; background-color: #0d1117; margin-bottom: 10px; padding: 10px; overflow-y: auto; text-align: left; }
-        .zar-ekrani { font-size: 5rem; margin: 20px 0; color: #58a6ff; }
+        body { background-color: #0d1117; color: #c9d1d9; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        #giris-ekrani { display: flex; flex-direction: column; justify-content: center; align-items: center; width: 100vw; height: 100vh; background-color: #0d1117; }
+        #ana-oyun-ekrani { display: none; width: 100vw; height: 100vh; }
+        .panel { border: 1px solid #30363d; padding: 15px; display: flex; flex-direction: column; box-sizing: border-box; overflow-y: auto; }
+        #sol-panel { width: 22%; background-color: #161b22; }
+        #orta-panel { width: 56%; background-color: #0d1117; text-align: center; }
+        #sag-panel { width: 22%; background-color: #161b22; }
+        
+        button { background-color: #238636; color: white; border: none; padding: 10px 15px; cursor: pointer; border-radius: 6px; font-weight: bold; margin: 5px; }
+        button:hover { background-color: #2ea043; }
+        .btn-danger { background-color: #da3637; } .btn-danger:hover { background-color: #f85149; }
+        .btn-warn { background-color: #bf8700; }
+        input { background-color: #0d1117; border: 1px solid #30363d; color: white; padding: 10px; border-radius: 6px; margin-bottom: 10px; width: 85%; }
+        
+        #sohbet-kutusu { flex-grow: 1; border: 1px solid #30363d; background-color: #0d1117; margin-bottom: 10px; padding: 10px; overflow-y: auto; text-align: left; height: 250px; font-size: 0.9rem; }
+        .oyun-kutusu { border: 1px solid #30363d; background-color: #161b22; margin: 15px 0; padding: 15px; border-radius: 8px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9rem; }
+        th, td { border: 1px solid #30363d; padding: 8px; text-align: center; }
+        th { background-color: #161b22; }
     </style>
 </head>
 <body>
 
     <div id="giris-ekrani">
-        <h1>🎲 SİBER KUMARHANE GİRİŞ 🎲</h1>
-        <p>Kullanıcı adını yaz ve masaya otur Baboli:</p>
-        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adın (Örn: Alper_Kral)">
-        <button onclick="girisYap()">Kumarhaneye Gir</button>
+        <h1 style="color: #58a6ff; font-size: 2.5rem; margin-bottom: 5px;">🎰 SİBER BİLİŞİM KUMARHANESİ v2.0 🎰</h1>
+        <p style="color: #8b949e;">Firebase Canlı Veritabanı Altyapısı ile Multiplayer Kumar Dünyası</p>
+        <br>
+        <input type="text" id="nick-girdi" placeholder="Kullanıcı Adınızı Seçin..." style="width: 300px; font-size: 1.2rem; text-align: center;">
+        <br>
+        <button onclick="girisYap()" style="font-size: 1.2rem; padding: 12px 40px;">Kumarhaneye Giriş Yap</button>
     </div>
 
     <div id="ana-oyun-ekrani">
+        
         <div class="panel" id="sol-panel">
-            <h2>Profil</h2>
-            <p>Kullanıcı: <b id="kullanici-adi">-</b></p>
-            <p>Bakiye: <b id="bakiye-miktari">0</b> Coin</p>
-            <hr style="border-color: #30363d;">
-            <h3>Coin Transferi</h3>
-            <input type="text" id="transfer-alici" placeholder="Alıcı adı...">
+            <h3>👤 Profil Bilgisi</h3>
+            <p>Oyuncu: <b id="kullanici-adi" style="color: #58a6ff;">-</b></p>
+            <p>Cüzdan: <b id="bakiye-miktari" style="color: #2ea043;">0</b> Coin</p>
+            
+            <hr style="border-color: #30363d; width: 100%;">
+            
+            <h3>💸 Coin Transferi</h3>
+            <input type="text" id="transfer-alici" placeholder="Kime göndereceksin?">
             <input type="number" id="transfer-miktar" placeholder="Miktar...">
-            <button onclick="paraGonder()">Coin Gönder</button>
+            <button onclick="paraGonder()">Parayı Fırlat</button>
+
+            <hr style="border-color: #30363d; width: 100%;">
+
+            <h3>🏆 Canlı Skor Tablosu</h3>
+            <table>
+                <thead>
+                    <tr><th>#</th><th>Oyuncu</th><th>Coin</th></tr>
+                </thead>
+                <tbody id="skor-tablosu-govde">
+                    </tbody>
+            </table>
         </div>
 
         <div class="panel" id="orta-panel">
-            <h1>🎲 ZAR DÜELLOSU </h1>
-            <p>4, 5, 6 katlar; 1, 2, 3 kasa yutar!</p>
-            <input type="number" id="bahis-miktari" placeholder="Bahis Miktarı...">
-            <br>
-            <button onclick="zarAt()">Zarı Fırlat!</button>
-            <div class="zar-ekrani" id="zar-sonuc">?</div>
-            <div id="oyun-mesaji">Bahis bekleniyor...</div>
+            <h2 style="color: #58a6ff; margin: 5px;">🎮 OYUN SALONU 🎮</h2>
+
+            <div class="oyun-kutusu">
+                <h3>🎲 Oyun 1: Zar Düellosu (1x Kazan)</h3>
+                <input type="number" id="bahis-zar" placeholder="Zar bahisi..." style="width: 50%;">
+                <button onclick="zarAt()">Zar At</button>
+                <div id="zar-mesaj" style="font-weight: bold; margin-top: 5px; color: #58a6ff;">Zarlar atılmayı bekliyor (4-5-6 kazanır).</div>
+            </div>
+
+            <div class="oyun-kutusu">
+                <h3>🃏 Oyun 2: Blackjack 21 (1.5x Kazan)</h3>
+                <input type="number" id="bahis-bj" placeholder="21 bahisi..." style="width: 50%;">
+                <button onclick="bjBaslat()">Masaya Otur</button>
+                <p id="bj-kasa-skor" style="color: #ff7b72;"></p>
+                <p id="bj-oyuncu-skor" style="color: #58a6ff; font-weight: bold;"></p>
+                <div id="bj-kontrol-alan" style="display:none;">
+                    <button onclick="bjKartAl()">Kart İste</button>
+                    <button onclick="bjDur()" class="btn-warn">Dur / Kasa Oynasın</button>
+                </div>
+                <div id="bj-mesaj" style="font-weight: bold; margin-top: 5px; color: #2ea043;"></div>
+            </div>
+
+            <div class="oyun-kutusu">
+                <h3>🏁 Oyun 3: At Yarışı Hipodromu (3x Kazan)</h3>
+                <input type="number" id="bahis-at" placeholder="At yarışı bahisi..." style="width: 50%;"><br>
+                <button onclick="atYarisiOyna(1)" style="background-color: #8a6321;">1. Şahbatur</button>
+                <button onclick="atYarisiOyna(2)" style="background-color: #8a6321;">2. Gülbatur</button>
+                <button onclick="atYarisiOyna(3)" style="background-color: #8a6321;">3. Bold Pilot</button>
+                <div id="at-mesaj" style="font-weight: bold; margin-top: 10px; color: #f2cc60;">Atını seç ve bahis miktarını yatır!</div>
+            </div>
         </div>
 
         <div class="panel" id="sag-panel">
-            <h2>Sınıf Sohbeti</h2>
+            <h3>💬 Canlı Sınıf Sohbeti</h3>
             <div id="sohbet-kutusu"></div>
-            <input type="text" id="mesaj-girdi" placeholder="Mesaj yaz...">
-            <button onclick="mesajGonder()">Gönder</button>
+            <input type="text" id="mesaj-girdi" placeholder="Mesajınızı yazın...">
+            <button onclick="mesajGonder()" style="width: 95%;">Gönder</button>
+
+            <hr style="border-color: #30363d; width: 100%; margin: 15px 0;">
+
+            <div style="background-color: #211818; padding: 10px; border: 1px solid #482323; border-radius: 6px;">
+                <h4 style="color: #ff7b72; margin: 0 0 10px 0;">👑 Baron Girişi</h4>
+                <div id="admin-giris-alani">
+                    <input type="password" id="admin-sifre-girdi" placeholder="Gizli admin şifresi...">
+                    <button onclick="adminGirisDene()" class="btn-danger" style="width: 95%;">Yetkilendir</button>
+                </div>
+                
+                <div id="admin-panel-icerik" style="display: none;">
+                    <p style="color: #2ea043; font-weight: bold; font-size: 0.8rem;">YÖNETİCİ MODU AKTİF</p>
+                    <input type="text" id="admin-hedef-oyuncu" placeholder="Hedef Oyuncu Nick...">
+                    <button onclick="adminBanla()" class="btn-danger" style="font-size: 0.8rem; padding: 5px 10px;">BANLA</button>
+                    <button onclick="adminSustur()" class="btn-warn" style="font-size: 0.8rem; padding: 5px 10px;">SUSTUR</button>
+                    <button onclick="adminSusturAc()" style="font-size: 0.8rem; padding: 5px 10px; background-color: #58a6ff;">AÇ</button>
+                    <hr style="border-color: #482323;">
+                    <input type="number" id="admin-para-miktar" placeholder="Basılacak Coin...">
+                    <button onclick="adminParaVer()" style="width: 95%; background-color: #8a6321;">Hesaba Coin Bas</button>
+                </div>
+            </div>
         </div>
+
     </div>
 
 </body>
